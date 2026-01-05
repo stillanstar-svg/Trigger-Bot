@@ -5,13 +5,8 @@ local ContextActionService = game:GetService("ContextActionService")
 local player = Players.LocalPlayer
 local mouse = player:GetMouse()
 
+local AUTO_SHOOT_ENABLED = true
 local IGNORE_TEAMMATES = false
-local AUTO_TOOLS = {
-	["[Revolver]"] = true,
-	["[Double-Barrel SG]"] = true,
-	["[DoubleBarrel]"] = true,
-	["[TacticalShotgun]"] = true,
-}
 
 local leftHeld = false
 local mouseDown = false
@@ -20,6 +15,7 @@ local holdThreshold = 0.15
 local lastTarget
 local canShoot = true
 local loopRunning = false
+local isCrouching = false
 
 local shotDelays = {0}
 
@@ -44,9 +40,40 @@ local function isFriendly(targetPlayer)
 	return false
 end
 
+local function isGun(tool)
+	if not tool or not tool:IsA("Tool") then return false end
+	for _, child in ipairs(tool:GetChildren()) do
+		if child:IsA("Script") or child:IsA("LocalScript") then
+			if string.match(child.Name:lower(), "gun") then
+				return true
+			end
+		end
+		if child:IsA("RemoteEvent") then
+			return true
+		end
+		if child:IsA("Folder") then
+			for _, sub in ipairs(child:GetDescendants()) do
+				if sub:IsA("RemoteEvent") then
+					return true
+				end
+			end
+		end
+	end
+	local handle = tool:FindFirstChild("Handle")
+	if handle then
+		for _, sound in ipairs(handle:GetDescendants()) do
+			if sound:IsA("Sound") and string.match(sound.Name:lower(), "shoot") then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 local function attemptLocalFire()
+	if not AUTO_SHOOT_ENABLED or isCrouching then return false end
 	local tool = getEquippedTool()
-	if tool and AUTO_TOOLS[tool.Name] and canShoot then
+	if tool and isGun(tool) and canShoot then
 		canShoot = false
 		pcall(function()
 			tool:Activate()
@@ -107,9 +134,9 @@ local function isValidTarget(instance)
 end
 
 local function handleMouseMovement()
-	if not leftHeld then return end
+	if not leftHeld or isCrouching then return end
 	local tool = getEquippedTool()
-	if not tool or not AUTO_TOOLS[tool.Name] then
+	if not tool or not isGun(tool) then
 		leftHeld = false
 		lastTarget = nil
 		return
@@ -122,10 +149,10 @@ local function handleMouseMovement()
 	local result = workspace:Raycast(origin, direction, params)
 	if result and isValidTarget(result.Instance) then
 		local distance = (result.Position - origin).Magnitude
-		if tool.Name == "[Revolver]" and distance > 200 then
+		if tool.Name:lower():find("revolver") and distance > 200 then
 			lastTarget = nil
 			return
-		elseif (tool.Name == "[Double-Barrel SG]" or tool.Name == "[TacticalShotgun]" or tool.Name == "[DoubleBarrel]") and distance > 75 then
+		elseif tool.Name:lower():find("double-barrel") or tool.Name:lower():find("shotgun") and distance > 75 then
 			lastTarget = nil
 			return
 		end
@@ -153,11 +180,10 @@ local function startAutoShootLoop()
 end
 
 local function blockLeftClick(actionName, inputState)
-	local tool = getEquippedTool()
 	if inputState == Enum.UserInputState.Begin then
 		mouseDown = true
 		holdStartTime = tick()
-		if tool and AUTO_TOOLS[tool.Name] then
+		if not isCrouching then
 			leftHeld = true
 			startAutoShootLoop()
 			return Enum.ContextActionResult.Sink
@@ -167,7 +193,7 @@ local function blockLeftClick(actionName, inputState)
 		leftHeld = false
 		lastTarget = nil
 		local heldTime = tick() - holdStartTime
-		if heldTime < holdThreshold and tool and AUTO_TOOLS[tool.Name] then
+		if heldTime < holdThreshold and not isCrouching then
 			attemptLocalFire()
 			return Enum.ContextActionResult.Sink
 		end
@@ -184,10 +210,28 @@ UserInputService.InputChanged:Connect(function(input, gp)
 	end
 end)
 
+UserInputService.InputBegan:Connect(function(input, gp)
+	if gp then return end
+	if input.KeyCode == Enum.KeyCode.LeftControl or input.KeyCode == Enum.KeyCode.RightControl then
+		isCrouching = true
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input, gp)
+	if gp then return end
+	if input.KeyCode == Enum.KeyCode.LeftControl or input.KeyCode == Enum.KeyCode.RightControl then
+		isCrouching = false
+		if mouseDown then
+			leftHeld = true
+			startAutoShootLoop()
+		end
+	end
+end)
+
 local function setupCharacter(char)
 	char.ChildAdded:Connect(function(child)
-		if child:IsA("Tool") and AUTO_TOOLS[child.Name] then
-			if mouseDown then
+		if child:IsA("Tool") and isGun(child) then
+			if mouseDown and not isCrouching then
 				leftHeld = true
 				startAutoShootLoop()
 			end
